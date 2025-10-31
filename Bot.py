@@ -5,17 +5,15 @@ import random
 from datetime import datetime, timedelta
 import json
 import os
-
+from aiohttp import web
+import asyncio
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-
 DATA_FILE = 'users_data.json'
-
-
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '123456789')
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',')]
 
@@ -32,7 +30,6 @@ def load_data():
 
 
 def save_data(data):
-
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -40,18 +37,14 @@ def save_data(data):
         logging.error(f"Ошибка сохранения данных: {e}")
 
 
-
 users_data = load_data()
 
 
 async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
     user_id = str(user.id)
     nickname = user.first_name
-
     current_time = datetime.now()
-
 
     if user_id not in users_data:
         users_data[user_id] = {
@@ -60,11 +53,8 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'nickname': nickname
         }
 
-
     users_data[user_id]['nickname'] = nickname
-
     user_info = users_data[user_id]
-
 
     if user_info['last_use']:
         last_use_time = datetime.fromisoformat(user_info['last_use'])
@@ -75,19 +65,15 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_left = cooldown - time_passed
             minutes = int(time_left.total_seconds() // 60)
             seconds = int(time_left.total_seconds() % 60)
-
             await update.message.reply_text(
                 f"{nickname}, повтори через {minutes} мин. {seconds} сек. "
                 f"Текущий размер - {user_info['size']:.2f} см."
             )
             return
 
-
     growth = round(random.uniform(0.5, 4.0), 2)
     user_info['size'] += growth
     user_info['last_use'] = current_time.isoformat()
-
-
     save_data(users_data)
 
     await update.message.reply_text(
@@ -97,14 +83,11 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
-
 
     if user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
         return
-
 
     if len(context.args) < 2:
         await update.message.reply_text(
@@ -117,14 +100,12 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = str(context.args[0])
         size_to_give = float(context.args[1])
 
-
         if target_user_id not in users_data:
             users_data[target_user_id] = {
                 'size': 0.0,
                 'last_use': None,
                 'nickname': 'Unknown'
             }
-
 
         users_data[target_user_id]['size'] += size_to_give
         save_data(users_data)
@@ -140,9 +121,7 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
-
 
     if user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
@@ -159,14 +138,12 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = str(context.args[0])
         new_size = float(context.args[1])
 
-
         if target_user_id not in users_data:
             users_data[target_user_id] = {
                 'size': 0.0,
                 'last_use': None,
                 'nickname': 'Unknown'
             }
-
 
         users_data[target_user_id]['size'] = new_size
         save_data(users_data)
@@ -181,23 +158,17 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if not users_data:
         await update.message.reply_text("📊 Статистика пуста. Никто еще не использовал /sisi")
         return
 
-
     sorted_users = sorted(users_data.items(), key=lambda x: x[1]['size'], reverse=True)
-
-
     message = "📊 <b>Топ размеров:</b>\n\n"
-
     medals = ["🥇", "🥈", "🥉"]
 
-    for index, (user_id, user_info) in enumerate(sorted_users[:10], 1):  # Топ 10
+    for index, (user_id, user_info) in enumerate(sorted_users[:10], 1):
         nickname = user_info.get('nickname', 'Unknown')
         size = user_info['size']
-
 
         if index <= 3:
             medal = medals[index - 1]
@@ -212,7 +183,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
     user_id = str(user.id)
     nickname = user.first_name
@@ -231,7 +201,6 @@ async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "Привет! 🎀\n\n"
         "Доступные команды:\n"
@@ -243,21 +212,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     logging.error(f"Update {update} caused error {context.error}")
 
 
-def main():
+async def health_check(request):
+    return web.Response(text='OK', status=200)
 
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+
+    port = int(os.getenv('PORT', 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Веб-сервер запущен на порту {port}")
+
+
+async def run_bot():
     TOKEN = os.getenv('BOT_TOKEN')
 
     if not TOKEN or TOKEN == 'YOUR_BOT_TOKEN':
         logging.error("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
 
-
     application = Application.builder().token(TOKEN).build()
-
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sisi", sisi_command))
@@ -266,13 +248,18 @@ def main():
     application.add_handler(CommandHandler("givesize", give_size_command))
     application.add_handler(CommandHandler("setsize", set_size_command))
 
-
     application.add_error_handler(error_handler)
 
-
     logging.info("Бот запущен...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+
+async def main():
+    await asyncio.gather(
+        start_web_server(),
+        run_bot()
+    )
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
