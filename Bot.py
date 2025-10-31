@@ -239,7 +239,6 @@ async def run_bot():
         logging.error("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
 
-    # Отключаем job queue чтобы избежать проблемы со слабыми ссылками
     application = Application.builder().token(TOKEN).job_queue(None).build()
 
     application.add_handler(CommandHandler("start", start_command))
@@ -252,7 +251,23 @@ async def run_bot():
     application.add_error_handler(error_handler)
 
     logging.info("Бот запущен...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
+    
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Остановка бота...")
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
 
 
 async def main():
@@ -263,5 +278,10 @@ async def main():
 
 
 if __name__ == '__main__':
+    asyncio.run(main())
+
+
+if __name__ == '__main__':
 
     asyncio.run(main())
+
