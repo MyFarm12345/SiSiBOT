@@ -3,62 +3,116 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import random
 from datetime import datetime, timedelta
-import json
 import os
 from aiohttp import web
 import asyncio
+import asyncpg
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-DATA_FILE = 'users_data.json'
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '123456789')
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',')]
 
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            logging.error("Ошибка чтения файла данных, создаём новый")
-            return {}
-    return {}
+# Глобальное подключение к БД
+db_pool = None
 
 
-def save_data(data):
+async def init_db():
+    """Инициализация подключения к базе данных"""
+    global db_pool
+    
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        logging.error("DATABASE_URL не установлен!")
+        return None
+    
     try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        db_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
+        logging.info("Подключение к базе данных успешно")
+        
+        # Создаём таблицу если её нет
+        async with db_pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    nickname TEXT NOT NULL,
+                    size REAL DEFAULT 0.0,
+                    last_use TIMESTAMP
+                )
+            ''')
+        logging.info("Таблица users готова")
+        return db_pool
     except Exception as e:
-        logging.error(f"Ошибка сохранения данных: {e}")
+        logging.error(f"Ошибка подключения к БД: {e}")
+        return None
 
 
-users_data = load_data()
+async def get_user_data(user_id: int):
+    """Получить данные пользователя"""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            'SELECT user_id, nickname, size, last_use FROM users WHERE user_id = $1',
+            user_id
+        )
+        if row:
+            return {
+                'user_id': row['user_id'],
+                'nickname': row['nickname'],
+                'size': float(row['size']),
+                'last_use': row['last_use']
+            }
+        return None
+
+
+async def save_user_data(user_id: int, nickname: str, size: float, last_use: datetime = None):
+    """Сохранить данные пользователя"""
+    async with db_pool.acquire() as conn:
+        await conn.execute('''
+            INSERT INTO users (user_id, nickname, size, last_use)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id) 
+            DO UPDATE SET nickname = $2, size = $3, last_use = $4
+        ''', user_id, nickname, size, last_use)
+
+
+async def get_all_users():
+    """Получить всех пользователей"""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            'SELECT user_id, nickname, size, last_use FROM users ORDER BY size DESC'
+        )
+        return [{
+            'user_id': row['user_id'],
+            'nickname': row['nickname'],
+            'size': float(row['size']),
+            'last_use': row['last_use']
+        } for row in rows]
 
 
 async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = str(user.id)
+    user_id = user.id
     nickname = user.first_name
     current_time = datetime.now()
 
-    if user_id not in users_data:
-        users_data[user_id] = {
+    # Получаем данные пользователя
+    user_data = await get_user_data(user_id)
+    
+    if not user_data:
+        # Новый пользователь
+        user_data = {
+            'user_id': user_id,
+            'nickname': nickname,
             'size': 0.0,
-            'last_use': None,
-            'nickname': nickname
+            'last_use': None
         }
 
-    users_data[user_id]['nickname'] = nickname
-    user_info = users_data[user_id]
-
-    if user_info['last_use']:
-        last_use_time = datetime.fromisoformat(user_info['last_use'])
-        time_passed = current_time - last_use_time
+    # Проверяем кулдаун
+    if user_data['last_use']:
+        time_passed = current_time - user_data['last_use']
         cooldown = timedelta(hours=1)
 
         if time_passed < cooldown:
@@ -67,18 +121,20 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             seconds = int(time_left.total_seconds() % 60)
             await update.message.reply_text(
                 f"{nickname}, повтори через {minutes} мин. {seconds} сек. "
-                f"Текущий размер - {user_info['size']:.2f} см."
+                f"Текущий размер - {user_data['size']:.2f} см."
             )
             return
 
+    # Увеличиваем размер
     growth = round(random.uniform(0.5, 4.0), 2)
-    user_info['size'] += growth
-    user_info['last_use'] = current_time.isoformat()
-    save_data(users_data)
+    new_size = user_data['size'] + growth
+    
+    # Сохраняем в БД
+    await save_user_data(user_id, nickname, new_size, current_time)
 
     await update.message.reply_text(
         f"{nickname}, твоя грудь выросла на {growth:.2f} см! "
-        f"Текущий размер - {user_info['size']:.2f} см."
+        f"Текущий размер - {new_size:.2f} см."
     )
 
 
@@ -97,22 +153,25 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_user_id = str(context.args[0])
+        target_user_id = int(context.args[0])
         size_to_give = float(context.args[1])
 
-        if target_user_id not in users_data:
-            users_data[target_user_id] = {
+        # Получаем данные пользователя
+        user_data = await get_user_data(target_user_id)
+        
+        if not user_data:
+            user_data = {
+                'nickname': 'Unknown',
                 'size': 0.0,
-                'last_use': None,
-                'nickname': 'Unknown'
+                'last_use': None
             }
-
-        users_data[target_user_id]['size'] += size_to_give
-        save_data(users_data)
+        
+        new_size = user_data['size'] + size_to_give
+        await save_user_data(target_user_id, user_data['nickname'], new_size, user_data['last_use'])
 
         await update.message.reply_text(
             f"✅ Выдано {size_to_give:.2f} см пользователю {target_user_id}\n"
-            f"Новый размер: {users_data[target_user_id]['size']:.2f} см"
+            f"Новый размер: {new_size:.2f} см"
         )
     except ValueError:
         await update.message.reply_text("❌ Неверный формат. Размер должен быть числом.")
@@ -135,18 +194,19 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_user_id = str(context.args[0])
+        target_user_id = int(context.args[0])
         new_size = float(context.args[1])
 
-        if target_user_id not in users_data:
-            users_data[target_user_id] = {
-                'size': 0.0,
-                'last_use': None,
-                'nickname': 'Unknown'
+        # Получаем данные пользователя
+        user_data = await get_user_data(target_user_id)
+        
+        if not user_data:
+            user_data = {
+                'nickname': 'Unknown',
+                'last_use': None
             }
-
-        users_data[target_user_id]['size'] = new_size
-        save_data(users_data)
+        
+        await save_user_data(target_user_id, user_data['nickname'], new_size, user_data.get('last_use'))
 
         await update.message.reply_text(
             f"✅ Установлен размер {new_size:.2f} см для пользователя {target_user_id}"
@@ -158,17 +218,18 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not users_data:
+    users = await get_all_users()
+    
+    if not users:
         await update.message.reply_text("📊 Статистика пуста. Никто еще не использовал /sisi")
         return
 
-    sorted_users = sorted(users_data.items(), key=lambda x: x[1]['size'], reverse=True)
     message = "📊 <b>Топ размеров:</b>\n\n"
     medals = ["🥇", "🥈", "🥉"]
 
-    for index, (user_id, user_info) in enumerate(sorted_users[:10], 1):
-        nickname = user_info.get('nickname', 'Unknown')
-        size = user_info['size']
+    for index, user_data in enumerate(users[:10], 1):
+        nickname = user_data['nickname']
+        size = user_data['size']
 
         if index <= 3:
             medal = medals[index - 1]
@@ -176,25 +237,27 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             message += f"<b>{index}.</b> {nickname} — {size:.2f} см\n"
 
-    if len(sorted_users) > 10:
-        message += f"\n<i>И еще {len(sorted_users) - 10} участников...</i>"
+    if len(users) > 10:
+        message += f"\n<i>И еще {len(users) - 10} участников...</i>"
 
     await update.message.reply_text(message, parse_mode='HTML')
 
 
 async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = str(user.id)
+    user_id = user.id
     nickname = user.first_name
 
-    if user_id not in users_data:
+    user_data = await get_user_data(user_id)
+    
+    if not user_data:
         await update.message.reply_text(
             f"{nickname}, ты еще не использовал /sisi\n"
             f"Текущий размер - 0.00 см"
         )
         return
 
-    size = users_data[user_id]['size']
+    size = user_data['size']
     await update.message.reply_text(
         f"{nickname}, твой текущий размер - {size:.2f} см"
     )
@@ -271,6 +334,14 @@ async def run_bot():
 
 
 async def main():
+    # Инициализируем БД
+    await init_db()
+    
+    if db_pool is None:
+        logging.error("Не удалось подключиться к базе данных!")
+        return
+    
+    # Запускаем веб-сервер и бота
     await asyncio.gather(
         start_web_server(),
         run_bot()
@@ -279,9 +350,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
-if __name__ == '__main__':
-
-    asyncio.run(main())
-
