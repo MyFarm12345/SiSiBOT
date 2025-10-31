@@ -239,7 +239,8 @@ async def run_bot():
         logging.error("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
 
-    application = Application.builder().token(TOKEN).build()
+    # Отключаем job queue чтобы избежать проблемы со слабыми ссылками
+    application = Application.builder().token(TOKEN).job_queue(None).build()
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sisi", sisi_command))
@@ -262,4 +263,5 @@ async def main():
 
 
 if __name__ == '__main__':
+
     asyncio.run(main())
