@@ -65,14 +65,28 @@ def create_or_update_user(user_id: str, nickname: str, size: float = None, last_
 
 def get_all_users_sorted():
     try:
-        response = supabase.table('users').select('*').not_.is_('size', 'is', None).order('size', desc=True).execute()
+        # Получаем все данные. RLS настроены на чтение (SELECT anon), что мы подтвердили.
+        response = supabase.table('users').select('*').execute()
         
-        # --- ДОБАВЛЕНО ДЛЯ ДИАГНОСТИКИ ---
-        user_count = len(response.data) if response.data else 0
-        logging.info(f"Диагностика /stats: Найдено пользователей с размером, отличным от NULL: {user_count}")
-        # ---------------------------------
+        users = response.data if response.data else []
         
-        return response.data if response.data else []
+        # Функция для принудительного преобразования 'size' к float для сортировки
+        # Это исправляет проблему с Supabase, возвращающим NUMERIC как строку
+        def get_sort_key(user):
+            try:
+                # size может прийти как строка ('2.44') или число. Конвертируем в float.
+                return float(user.get('size', 0.0))
+            except (ValueError, TypeError):
+                # Возвращаем 0.0, если данные невалидны, чтобы не упасть
+                return 0.0
+                
+        # Сортируем в Python по гарантированному float-ключу
+        sorted_users = sorted(users, key=get_sort_key, reverse=True) 
+
+        logging.info(f"Диагностика /stats: Найдено пользователей после сортировки: {len(sorted_users)}")
+        
+        return sorted_users
+
     except Exception as e:
         logging.error(f"Ошибка получения списка пользователей: {e}", exc_info=True)
         return []
@@ -106,8 +120,11 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка доступа к базе данных. Попробуйте позже.")
             return
 
-    if user_data.get('size') is None:
-        user_data['size'] = 0.0
+    # Принудительная конвертация size в float, т.к. Supabase может вернуть строку
+    try:
+        current_size = float(user_data.get('size', 0.0))
+    except (ValueError, TypeError):
+        current_size = 0.0
 
     if user_data.get('last_use'):
         try:
@@ -125,7 +142,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 await update.message.reply_text(
                     f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>\n\n"
-                    f"<i>Текущий размер - {user_data['size']:.2f} см.</i>",
+                    f"<i>Текущий размер - {current_size:.2f} см.</i>",
                     parse_mode='HTML'
                 )
                 return
@@ -137,7 +154,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     growth = round(random.uniform(0.5, 4.0), 2)
-    new_size = user_data['size'] + growth
+    new_size = current_size + growth
 
     updated_user = create_or_update_user(
         user_id,
@@ -147,9 +164,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if updated_user:
-        # --- ДОБАВЛЕНО ДЛЯ ДИАГНОСТИКИ ---
         logging.info(f"Обновлен пользователь {user_id}: Новый размер = {updated_user.get('size', new_size):.2f}")
-        # ---------------------------------
 
         await update.message.reply_text(
             f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> \n\n "
@@ -181,14 +196,15 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         size_to_give = float(context.args[1])
 
         user_data = get_user_data(target_user_id)
-        current_size = 0.0
-        nickname = 'Unknown'
-        last_use = None
-
-        if user_data:
-            current_size = user_data.get('size', 0.0)
-            nickname = user_data.get('nickname', 'Unknown')
-            last_use = user_data.get('last_use')
+        
+        # Конвертируем current_size в float
+        try:
+            current_size = float(user_data.get('size', 0.0)) if user_data else 0.0
+        except (ValueError, TypeError):
+            current_size = 0.0
+            
+        nickname = user_data.get('nickname', 'Unknown') if user_data else 'Unknown'
+        last_use = user_data.get('last_use') if user_data else None
 
         new_size = current_size + size_to_give
         updated_user = create_or_update_user(target_user_id, nickname, new_size, last_use)
@@ -196,7 +212,7 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if updated_user:
             await update.message.reply_text(
                 f"✅ Выдано {size_to_give:.2f} см пользователю {target_user_id}\n"
-                f"Новый размер: {updated_user.get('size', new_size):.2f} см"
+                f"Новый размер: {new_size:.2f} см"
             )
         else:
             await update.message.reply_text("❌ Ошибка обновления данных")
@@ -269,10 +285,16 @@ async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"❌ Пользователь {target_user_id} не найден в базе данных")
             return
 
+        # Конвертируем size в float для отображения
+        try:
+            deleted_size = float(user_data.get('size', 0.0))
+        except (ValueError, TypeError):
+            deleted_size = 0.0
+
         if delete_user(target_user_id):
             await update.message.reply_text(
                 f"✅ Статистика пользователя {target_user_id} ({user_data.get('nickname', 'N/A')}) полностью удалена\n"
-                f"Удален размер: {user_data.get('size', 0.0):.2f} см"
+                f"Удален размер: {deleted_size:.2f} см"
             )
         else:
             await update.message.reply_text("❌ Ошибка удаления пользователя")
@@ -282,6 +304,7 @@ async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Теперь get_all_users_sorted возвращает данные, отсортированные в Python
     users = get_all_users_sorted()
 
     if not users:
@@ -293,7 +316,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for index, user_data in enumerate(users[:10], 1):
         nickname = user_data.get('nickname', 'Unknown')
-        size = user_data.get('size', 0.0)
+        
+        # Конвертируем size в float для отображения
+        try:
+            size = float(user_data.get('size', 0.0))
+        except (ValueError, TypeError):
+            size = 0.0
 
         if index <= 3:
             medal = medals[index - 1]
@@ -317,14 +345,19 @@ async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_data = get_user_data(user_id)
 
-    if not user_data or user_data.get('size') is None:
+    # Конвертируем size в float здесь
+    try:
+        size = float(user_data.get('size', 0.0)) if user_data else 0.0
+    except (ValueError, TypeError):
+        size = 0.0
+
+    if size == 0.0 and (not user_data or user_data.get('size') is None):
         await update.message.reply_text(
             f"{nickname}, ты еще не использовал /sisi\n"
             f"Текущий размер - 0.00 см"
         )
         return
 
-    size = user_data['size']
     await update.message.reply_text(
         f"{nickname}, твой текущий размер - {size:.2f} см"
     )
@@ -458,3 +491,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
