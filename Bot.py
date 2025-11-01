@@ -66,6 +66,12 @@ def create_or_update_user(user_id: str, nickname: str, size: float = None, last_
 def get_all_users_sorted():
     try:
         response = supabase.table('users').select('*').not_.is_('size', 'is', None).order('size', desc=True).execute()
+        
+        # --- ДОБАВЛЕНО ДЛЯ ДИАГНОСТИКИ ---
+        user_count = len(response.data) if response.data else 0
+        logging.info(f"Диагностика /stats: Найдено пользователей с размером, отличным от NULL: {user_count}")
+        # ---------------------------------
+        
         return response.data if response.data else []
     except Exception as e:
         logging.error(f"Ошибка получения списка пользователей: {e}", exc_info=True)
@@ -141,6 +147,10 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if updated_user:
+        # --- ДОБАВЛЕНО ДЛЯ ДИАГНОСТИКИ ---
+        logging.info(f"Обновлен пользователь {user_id}: Новый размер = {updated_user.get('size', new_size):.2f}")
+        # ---------------------------------
+
         await update.message.reply_text(
             f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> \n\n "
             f"<i>Текущий размер - {new_size:.2f} см.🍈</i>",
@@ -448,5 +458,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
