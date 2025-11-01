@@ -1,6 +1,6 @@
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ChatMember
+from telegram.ext import Application, CommandHandler, ContextTypes, ChatMemberHandler
 import random
 from datetime import datetime, timedelta
 import os
@@ -307,8 +307,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/givesize <user_id> <размер> - добавить размер\n"
         "/setsize <user_id> <размер> - установить размер\n"
         "/deleteuser <user_id> - удалить статистику\n\n"
-        "В группах используй: /sisi@your_bot_username"
+        "Бот работает в личных сообщениях и группах!"
     )
+
+
+async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отслеживание участников чата"""
+    try:
+        result = update.my_chat_member or update.chat_member
+        if result:
+            chat = result.chat
+            user = result.new_chat_member.user
+            
+            logging.info(
+                f"Chat member update in {chat.title if chat.title else 'Private'} "
+                f"(ID: {chat.id}): User {user.first_name} (ID: {user.id}) "
+                f"status changed to {result.new_chat_member.status}"
+            )
+    except Exception as e:
+        logging.error(f"Error tracking chat member: {e}")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -336,15 +353,14 @@ async def run_bot():
     TOKEN = os.getenv('BOT_TOKEN')
 
     if not TOKEN or TOKEN == 'YOUR_BOT_TOKEN':
-        logging.error("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
 
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logging.error("Не установлены данные Supabase! Установите SUPABASE_URL и SUPABASE_KEY")
         return
 
     application = Application.builder().token(TOKEN).build()
 
+    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sisi", sisi_command))
     application.add_handler(CommandHandler("stats", stats_command))
@@ -352,11 +368,25 @@ async def run_bot():
     application.add_handler(CommandHandler("givesize", give_size_command))
     application.add_handler(CommandHandler("setsize", set_size_command))
     application.add_handler(CommandHandler("deleteuser", delete_user_command))
+    
+    # Добавляем обработчик для отслеживания участников
+    application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.ANY_CHAT_MEMBER))
 
     application.add_error_handler(error_handler)
 
     logging.info("Бот запущен...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    await application.run_polling(
+        allowed_updates=[
+            Update.MESSAGE,
+            Update.EDITED_MESSAGE,
+            Update.CHANNEL_POST,
+            Update.EDITED_CHANNEL_POST,
+            Update.CALLBACK_QUERY,
+            Update.MY_CHAT_MEMBER,
+            Update.CHAT_MEMBER
+        ],
+        drop_pending_updates=True
+    )
 
 
 async def main():
