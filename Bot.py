@@ -115,7 +115,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_data:
             await update.message.reply_text("❌ Ошибка доступа к базе данных. Попробуйте позже.")
             return
-    
+
     # Если у пользователя нет размера (старая запись), установим 0
     if user_data.get('size') is None:
         user_data['size'] = 0.0
@@ -125,11 +125,11 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             # --- ИЗМЕНЕНИЕ: last_use_time будет 'aware' (с часовым поясом) ---
             last_use_time = datetime.fromisoformat(user_data['last_use'])
-            
+
             # Убедимся, что last_use_time имеет часовой пояс для сравнения
             if last_use_time.tzinfo is None:
                 last_use_time = last_use_time.replace(tzinfo=timezone.utc)
-                
+
             time_passed = current_time - last_use_time
             cooldown = timedelta(hours=1)
 
@@ -144,29 +144,28 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except ValueError:
             logging.error(f"Неверный формат даты в 'last_use' для пользователя {user_id}: {user_data['last_use']}")
-            # Сбрасываем 'last_use', чтобы пользователь мог продолжить
+ 
             pass
         except TypeError as e:
             logging.error(f"Ошибка сравнения времени для {user_id}: {e}", exc_info=True)
             pass
 
 
-    # Увеличиваем размер
     growth = round(random.uniform(0.5, 4.0), 2)
     new_size = user_data['size'] + growth
 
-    # Обновляем в базе данных
+    
     updated_user = create_or_update_user(
         user_id,
         nickname,
         new_size,
-        current_time.isoformat()  # <--- Сохраняем в ISO формате с UTC
+        current_time.isoformat()  
     )
 
     if updated_user:
         await update.message.reply_text(
-            f"{nickname}, твоя грудь выросла на {growth:.2f} см! "
-            f"Текущий размер - {new_size:.2f} см."
+            f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> "
+            f"<i>Текущий размер - {new_size:.2f} см.🍈</i>"
         )
     else:
         await update.message.reply_text("❌ Ошибка обновления данных. Попробуйте позже.")
@@ -183,8 +182,6 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "Использование: /givesize <user_id> <размер>\n"
-            "Пример: /givesize 123456789 100.5"
         )
         return
 
@@ -213,7 +210,7 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ошибка обновления данных")
     except ValueError:
-        await update.message.reply_text("❌ Неверный формат. ID и размер должны быть числами.")
+        await update.message.reply_text("")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
@@ -229,8 +226,6 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 2:
         await update.message.reply_text(
-            "Использование: /setsize <user_id> <размер>\n"
-            "Пример: /setsize 123456789 100.5"
         )
         return
 
@@ -326,7 +321,7 @@ async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
         return
-        
+
     user_id = str(user.id)
     nickname = user.first_name or user.username or "Unknown"
 
@@ -352,11 +347,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/sisi - увеличить размер (раз в час)\n"
         "/mysize - проверить свой размер\n"
         "/stats - посмотреть топ участников\n\n"
-        "Команды для администраторов:\n"
-        "/givesize <user_id> <размер> - добавить размер\n"
-        "/setsize <user_id> <размер> - установить размер\n"
-        "/deleteuser <user_id> - удалить статистику\n\n"
-        "Бот работает в личных сообщениях и группах!"
     )
 
 
@@ -421,7 +411,7 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
-    
+
     try:
         await site.start()
         logging.info(f"Веб-сервер запущен на порту {port}")
@@ -461,7 +451,7 @@ async def run_bot():
     logging.info("Бот запускается (polling)...")
     try:
         await application.run_polling(
-            allowed_updates=Update.ALL_TYPES, # <--- Упрощено для надежности
+            allowed_updates=Update.ALL_TYPES,  # <--- Упрощено для надежности
             drop_pending_updates=True
         )
     except Exception as e:
@@ -471,7 +461,7 @@ async def run_bot():
 async def main():
     """Главная функция для запуска веб-сервера и бота параллельно"""
     logging.info("Запуск main()...")
-    
+
     # Запускаем обе задачи параллельно
     # gather дождется завершения обеих (хотя в идеале они не должны завершаться)
     try:
