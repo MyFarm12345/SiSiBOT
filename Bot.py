@@ -8,13 +8,11 @@ from aiohttp import web
 import asyncio
 from supabase import create_client, Client
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# Supabase настройки
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
@@ -24,28 +22,23 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ID Администраторов
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '123456789')
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',')]
 
 
 def get_user_data(user_id: str):
-    """Получить данные пользователя из Supabase"""
     try:
         response = supabase.table('users').select('*').eq('user_id', user_id).limit(1).execute()
         if response.data and len(response.data) > 0:
             return response.data[0]
         return None
     except Exception as e:
-        # Логгируем ошибку, но не валимся
         logging.error(f"Ошибка получения данных пользователя {user_id}: {e}", exc_info=True)
         return None
 
 
 def create_or_update_user(user_id: str, nickname: str, size: float = None, last_use: str = None):
-    """Создать или обновить данные пользователя (UPSERT)"""
     try:
-        # Готовим данные для вставки или обновления
         user_data = {
             'user_id': user_id,
             'nickname': nickname,
@@ -55,8 +48,6 @@ def create_or_update_user(user_id: str, nickname: str, size: float = None, last_
         if last_use is not None:
             user_data['last_use'] = last_use
 
-        # Используем 'upsert' для атомарного создания или обновления
-        # 'on_conflict' указывает, что делать, если 'user_id' уже существует
         response = supabase.table('users').upsert(
             user_data,
             on_conflict='user_id'
@@ -65,7 +56,6 @@ def create_or_update_user(user_id: str, nickname: str, size: float = None, last_
         if response.data and len(response.data) > 0:
             return response.data[0]
         else:
-            # Если upsert не вернул данные, запросим их
             return get_user_data(user_id)
 
     except Exception as e:
@@ -74,9 +64,7 @@ def create_or_update_user(user_id: str, nickname: str, size: float = None, last_
 
 
 def get_all_users_sorted():
-    """Получить всех пользователей, отсортированных по размеру"""
     try:
-        # Убедимся, что size не null, чтобы сортировка работала корректно
         response = supabase.table('users').select('*').not_.is_('size', 'is', None).order('size', desc=True).execute()
         return response.data if response.data else []
     except Exception as e:
@@ -85,7 +73,6 @@ def get_all_users_sorted():
 
 
 def delete_user(user_id: str):
-    """Удалить пользователя из базы данных"""
     try:
         response = supabase.table('users').delete().eq('user_id', user_id).execute()
         return True
@@ -130,7 +117,6 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 minutes = int(time_left.total_seconds() // 60)
                 seconds = int(time_left.total_seconds() % 60)
                 
-                # --- ИСПРАВЛЕНИЕ: Добавлен parse_mode='HTML' ---
                 await update.message.reply_text(
                     f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>"
                     f"<i>Текущий размер - {user_data['size']:.2f} см.</i>",
@@ -174,7 +160,6 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        # --- ИСПРАВЛЕНИЕ: Добавлен текст помощи ---
         await update.message.reply_text(
             "Использование: /givesize <user_id> <размер>\n"
             "Пример: /givesize 123456789 100.5"
@@ -206,7 +191,6 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ошибка обновления данных")
     except ValueError:
-        # --- ИСПРАВЛЕНИЕ: Добавлен текст ошибки ---
         await update.message.reply_text("❌ Неверный формат. ID и размер должны быть числами.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
@@ -222,7 +206,6 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        # --- ИСПРАВЛЕНИЕ: Добавлен текст помощи ---
         await update.message.reply_text(
             "Использование: /setsize <user_id> <размер>\n"
             "Пример: /setsize 123456789 100.5"
@@ -252,7 +235,6 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удалить статистику пользователя по ID"""
     user = update.effective_user
     if not user:
         return
@@ -349,7 +331,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отслеживание изменений в участниках чата (входы, выходы, бот)"""
     try:
         result = update.chat_member or update.my_chat_member
 
@@ -385,18 +366,15 @@ async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Логгирование ошибок"""
     logging.error(f"Update {update} caused error {context.error}", exc_info=context.error)
 
 
 async def health_check(request):
-    """Endpoint для UptimeBot/Render health check"""
     logging.info("Health check / OK")
     return web.Response(text='OK', status=200)
 
 
 async def start_web_server():
-    """Запуск веб-сервера aiohttp для health check"""
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
@@ -409,20 +387,16 @@ async def start_web_server():
     try:
         await site.start()
         logging.info(f"Веб-сервер запущен на порту {port}")
-        # --- ИСПРАВЛЕНИЕ: УБРАНА БЛОКИРОВКА ---
-        # Мы НЕ ждем здесь вечно. Мы позволяем `run_bot` быть главным блокировщиком.
-        # await asyncio.Event().wait() # <--- УДАЛЕНО
     except Exception as e:
         logging.error(f"Ошибка запуска веб-сервера: {e}", exc_info=True)
-        # Не очищаем runner здесь, пусть main() разберется
-        
-    # Просто запускаем и выходим. `aiohttp` будет работать в фоновой задаче.
+    
+    return runner
 
 
-async def run_bot():
-    """Запуск основного процесса бота (polling)"""
+async def main():
+    logging.info("Запуск main()...")
+
     TOKEN = os.getenv('BOT_TOKEN')
-
     if not TOKEN or TOKEN == 'YOUR_BOT_TOKEN':
         logging.critical("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
@@ -439,35 +413,39 @@ async def run_bot():
     application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.ANY_CHAT_MEMBER))
     application.add_error_handler(error_handler)
 
-    logging.info("Бот запускается (polling)...")
+    web_runner = None
     try:
-        # Эта функция будет блокировать выполнение и держать цикл событий живым
-        # и для бота, и для веб-сервера
-        await application.run_polling(
+        logging.info("Запуск веб-сервера (non-blocking)...")
+        web_runner = await start_web_server()
+        
+        logging.info("Запуск бота (non-blocking)...")
+        await application.initialize()
+        await application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
+        await application.start()
+        logging.info("Бот и веб-сервер успешно запущены.")
+
+        await asyncio.Event().wait()
+
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Получен сигнал завершения...")
     except Exception as e:
-        # Эта ошибка будет поймана, если polling упадет
-        logging.critical(f"Критическая ошибка при запуске polling: {e}", exc_info=True)
+        logging.critical(f"Критическая ошибка в main(): {e}", exc_info=True)
     finally:
-        logging.warning("Polling бота остановлен.")
-        # Здесь можно добавить код для грациозного завершения,
-        # но Render все равно перезапустит сервис.
-
-
-async def main():
-    """Главная функция для запуска веб-сервера и бота параллельно"""
-    logging.info("Запуск main()...")
-
-    try:
-        await asyncio.gather(
-            start_web_server(), # Эта функция быстро запустится и завершится
-            run_bot()           # Эта функция будет работать вечно (блокировать)
-        )
-    except Exception as e:
-        logging.critical(f"Критическая ошибка в main() gather: {e}", exc_info=True)
+        logging.warning("Начало процесса завершения...")
+        if 'application' in locals() and application.updater and application.updater.running:
+            await application.updater.stop()
+        if 'application' in locals() and application.running:
+            await application.stop()
+        if 'application' in locals() and hasattr(application, 'shutdown'):
+            await application.shutdown()
+        if web_runner:
+            await web_runner.cleanup()
+        logging.warning("Сервисы остановлены.")
 
 
 if __name__ == '__main__':
     asyncio.run(main())
+
