@@ -118,7 +118,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 seconds = int(time_left.total_seconds() % 60)
                 
                 await update.message.reply_text(
-                    f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>"
+                    f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>\n\n"
                     f"<i>Текущий размер - {user_data['size']:.2f} см.</i>",
                     parse_mode='HTML'
                 )
@@ -142,7 +142,7 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if updated_user:
         await update.message.reply_text(
-            f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> "
+            f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> \n\n "
             f"<i>Текущий размер - {new_size:.2f} см.🍈</i>",
             parse_mode='HTML'
         )
@@ -448,4 +448,5 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 
