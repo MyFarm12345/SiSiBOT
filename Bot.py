@@ -138,13 +138,13 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 minutes = int(time_left.total_seconds() // 60)
                 seconds = int(time_left.total_seconds() % 60)
                 await update.message.reply_text(
-                    f"{nickname}, повтори через {minutes} мин. {seconds} сек. "
-                    f"Текущий размер - {user_data['size']:.2f} см."
+                    f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>"
+                    f"<i>Текущий размер - {user_data['size']:.2f} см.</i>"
                 )
                 return
         except ValueError:
             logging.error(f"Неверный формат даты в 'last_use' для пользователя {user_id}: {user_data['last_use']}")
- 
+
             pass
         except TypeError as e:
             logging.error(f"Ошибка сравнения времени для {user_id}: {e}", exc_info=True)
@@ -154,12 +154,12 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     growth = round(random.uniform(0.5, 4.0), 2)
     new_size = user_data['size'] + growth
 
-    
+
     updated_user = create_or_update_user(
         user_id,
         nickname,
         new_size,
-        current_time.isoformat()  
+        current_time.isoformat()
     )
 
     if updated_user:
