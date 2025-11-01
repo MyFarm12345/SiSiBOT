@@ -6,113 +6,104 @@ from datetime import datetime, timedelta
 import os
 from aiohttp import web
 import asyncio
-import asyncpg
+from supabase import create_client, Client
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
+# Supabase настройки
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '123456789')
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',')]
 
-# Глобальное подключение к БД
-db_pool = None
 
-
-async def init_db():
-    """Инициализация подключения к базе данных"""
-    global db_pool
-    
-    database_url = os.getenv('DATABASE_URL')
-    if not database_url:
-        logging.error("DATABASE_URL не установлен!")
-        return None
-    
+def get_user_data(user_id: str):
+    """Получить данные пользователя из Supabase"""
     try:
-        db_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
-        logging.info("Подключение к базе данных успешно")
-        
-        # Создаём таблицу если её нет
-        async with db_pool.acquire() as conn:
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    nickname TEXT NOT NULL,
-                    size REAL DEFAULT 0.0,
-                    last_use TIMESTAMP
-                )
-            ''')
-        logging.info("Таблица users готова")
-        return db_pool
+        response = supabase.table('users').select('*').eq('user_id', user_id).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        return None
     except Exception as e:
-        logging.error(f"Ошибка подключения к БД: {e}")
+        logging.error(f"Ошибка получения данных пользователя: {e}")
         return None
 
 
-async def get_user_data(user_id: int):
-    """Получить данные пользователя"""
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            'SELECT user_id, nickname, size, last_use FROM users WHERE user_id = $1',
-            user_id
-        )
-        if row:
-            return {
-                'user_id': row['user_id'],
-                'nickname': row['nickname'],
-                'size': float(row['size']),
-                'last_use': row['last_use']
+def create_or_update_user(user_id: str, nickname: str, size: float = None, last_use: str = None):
+    """Создать или обновить данные пользователя"""
+    try:
+        existing_user = get_user_data(user_id)
+        
+        if existing_user:
+            # Обновляем существующего пользователя
+            update_data = {'nickname': nickname}
+            if size is not None:
+                update_data['size'] = size
+            if last_use is not None:
+                update_data['last_use'] = last_use
+            
+            response = supabase.table('users').update(update_data).eq('user_id', user_id).execute()
+            return response.data[0] if response.data else None
+        else:
+            # Создаем нового пользователя
+            new_user = {
+                'user_id': user_id,
+                'nickname': nickname,
+                'size': size if size is not None else 0.0,
+                'last_use': last_use
             }
+            response = supabase.table('users').insert(new_user).execute()
+            return response.data[0] if response.data else None
+    except Exception as e:
+        logging.error(f"Ошибка создания/обновления пользователя: {e}")
         return None
 
 
-async def save_user_data(user_id: int, nickname: str, size: float, last_use: datetime = None):
-    """Сохранить данные пользователя"""
-    async with db_pool.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO users (user_id, nickname, size, last_use)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id) 
-            DO UPDATE SET nickname = $2, size = $3, last_use = $4
-        ''', user_id, nickname, size, last_use)
+def get_all_users_sorted():
+    """Получить всех пользователей, отсортированных по размеру"""
+    try:
+        response = supabase.table('users').select('*').order('size', desc=True).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        logging.error(f"Ошибка получения списка пользователей: {e}")
+        return []
 
 
-async def get_all_users():
-    """Получить всех пользователей"""
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            'SELECT user_id, nickname, size, last_use FROM users ORDER BY size DESC'
-        )
-        return [{
-            'user_id': row['user_id'],
-            'nickname': row['nickname'],
-            'size': float(row['size']),
-            'last_use': row['last_use']
-        } for row in rows]
+def delete_user(user_id: str):
+    """Удалить пользователя из базы данных"""
+    try:
+        response = supabase.table('users').delete().eq('user_id', user_id).execute()
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка удаления пользователя: {e}")
+        return False
 
 
 async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = user.id
-    nickname = user.first_name
+    user_id = str(user.id)
+    nickname = user.first_name or user.username or "Unknown"
     current_time = datetime.now()
 
-    # Получаем данные пользователя
-    user_data = await get_user_data(user_id)
-    
+    # Получаем данные пользователя из базы
+    user_data = get_user_data(user_id)
+
     if not user_data:
-        # Новый пользователь
-        user_data = {
-            'user_id': user_id,
-            'nickname': nickname,
-            'size': 0.0,
-            'last_use': None
-        }
+        # Создаем нового пользователя
+        user_data = create_or_update_user(user_id, nickname, 0.0, None)
+        if not user_data:
+            await update.message.reply_text("❌ Ошибка доступа к базе данных")
+            return
 
     # Проверяем кулдаун
     if user_data['last_use']:
-        time_passed = current_time - user_data['last_use']
+        last_use_time = datetime.fromisoformat(user_data['last_use'])
+        time_passed = current_time - last_use_time
         cooldown = timedelta(hours=1)
 
         if time_passed < cooldown:
@@ -129,13 +120,21 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     growth = round(random.uniform(0.5, 4.0), 2)
     new_size = user_data['size'] + growth
     
-    # Сохраняем в БД
-    await save_user_data(user_id, nickname, new_size, current_time)
-
-    await update.message.reply_text(
-        f"{nickname}, твоя грудь выросла на {growth:.2f} см! "
-        f"Текущий размер - {new_size:.2f} см."
+    # Обновляем в базе данных
+    updated_user = create_or_update_user(
+        user_id, 
+        nickname, 
+        new_size, 
+        current_time.isoformat()
     )
+
+    if updated_user:
+        await update.message.reply_text(
+            f"{nickname}, твоя грудь выросла на {growth:.2f} см! "
+            f"Текущий размер - {new_size:.2f} см."
+        )
+    else:
+        await update.message.reply_text("❌ Ошибка обновления данных")
 
 
 async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,26 +152,24 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_user_id = int(context.args[0])
+        target_user_id = str(context.args[0])
         size_to_give = float(context.args[1])
 
-        # Получаем данные пользователя
-        user_data = await get_user_data(target_user_id)
+        user_data = get_user_data(target_user_id)
         
         if not user_data:
-            user_data = {
-                'nickname': 'Unknown',
-                'size': 0.0,
-                'last_use': None
-            }
-        
-        new_size = user_data['size'] + size_to_give
-        await save_user_data(target_user_id, user_data['nickname'], new_size, user_data['last_use'])
+            user_data = create_or_update_user(target_user_id, 'Unknown', size_to_give, None)
+        else:
+            new_size = user_data['size'] + size_to_give
+            user_data = create_or_update_user(target_user_id, user_data['nickname'], new_size, user_data['last_use'])
 
-        await update.message.reply_text(
-            f"✅ Выдано {size_to_give:.2f} см пользователю {target_user_id}\n"
-            f"Новый размер: {new_size:.2f} см"
-        )
+        if user_data:
+            await update.message.reply_text(
+                f"✅ Выдано {size_to_give:.2f} см пользователю {target_user_id}\n"
+                f"Новый размер: {user_data['size']:.2f} см"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка обновления данных")
     except ValueError:
         await update.message.reply_text("❌ Неверный формат. Размер должен быть числом.")
     except Exception as e:
@@ -194,31 +191,67 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_user_id = int(context.args[0])
+        target_user_id = str(context.args[0])
         new_size = float(context.args[1])
 
-        # Получаем данные пользователя
-        user_data = await get_user_data(target_user_id)
+        user_data = get_user_data(target_user_id)
+        nickname = user_data['nickname'] if user_data else 'Unknown'
+        last_use = user_data['last_use'] if user_data else None
         
-        if not user_data:
-            user_data = {
-                'nickname': 'Unknown',
-                'last_use': None
-            }
-        
-        await save_user_data(target_user_id, user_data['nickname'], new_size, user_data.get('last_use'))
+        updated_user = create_or_update_user(target_user_id, nickname, new_size, last_use)
 
-        await update.message.reply_text(
-            f"✅ Установлен размер {new_size:.2f} см для пользователя {target_user_id}"
-        )
+        if updated_user:
+            await update.message.reply_text(
+                f"✅ Установлен размер {new_size:.2f} см для пользователя {target_user_id}"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка обновления данных")
     except ValueError:
         await update.message.reply_text("❌ Неверный формат. Размер должен быть числом.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 
+async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удалить статистику пользователя по ID"""
+    user = update.effective_user
+
+    if user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для использования этой команды.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "Использование: /deleteuser <user_id>\n"
+            "Пример: /deleteuser 123456789"
+        )
+        return
+
+    try:
+        target_user_id = str(context.args[0])
+        
+        # Проверяем существование пользователя
+        user_data = get_user_data(target_user_id)
+        
+        if not user_data:
+            await update.message.reply_text(f"❌ Пользователь {target_user_id} не найден в базе данных")
+            return
+        
+        # Удаляем пользователя
+        if delete_user(target_user_id):
+            await update.message.reply_text(
+                f"✅ Статистика пользователя {target_user_id} ({user_data['nickname']}) полностью удалена\n"
+                f"Удален размер: {user_data['size']:.2f} см"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка удаления пользователя")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = await get_all_users()
+    users = get_all_users_sorted()
     
     if not users:
         await update.message.reply_text("📊 Статистика пуста. Никто еще не использовал /sisi")
@@ -228,7 +261,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     medals = ["🥇", "🥈", "🥉"]
 
     for index, user_data in enumerate(users[:10], 1):
-        nickname = user_data['nickname']
+        nickname = user_data.get('nickname', 'Unknown')
         size = user_data['size']
 
         if index <= 3:
@@ -245,11 +278,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def my_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = user.id
-    nickname = user.first_name
+    user_id = str(user.id)
+    nickname = user.first_name or user.username or "Unknown"
 
-    user_data = await get_user_data(user_id)
-    
+    user_data = get_user_data(user_id)
+
     if not user_data:
         await update.message.reply_text(
             f"{nickname}, ты еще не использовал /sisi\n"
@@ -270,7 +303,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/sisi - увеличить размер (раз в час)\n"
         "/mysize - проверить свой размер\n"
         "/stats - посмотреть топ участников\n\n"
-        "В группах используй: /sisi@sisiupbot"
+        "Команды для администраторов:\n"
+        "/givesize <user_id> <размер> - добавить размер\n"
+        "/setsize <user_id> <размер> - установить размер\n"
+        "/deleteuser <user_id> - удалить статистику\n\n"
+        "В группах используй: /sisi@your_bot_username"
     )
 
 
@@ -302,7 +339,11 @@ async def run_bot():
         logging.error("Не установлен токен бота! Установите переменную окружения BOT_TOKEN")
         return
 
-    application = Application.builder().token(TOKEN).job_queue(None).build()
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logging.error("Не установлены данные Supabase! Установите SUPABASE_URL и SUPABASE_KEY")
+        return
+
+    application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sisi", sisi_command))
@@ -310,38 +351,15 @@ async def run_bot():
     application.add_handler(CommandHandler("mysize", my_size_command))
     application.add_handler(CommandHandler("givesize", give_size_command))
     application.add_handler(CommandHandler("setsize", set_size_command))
+    application.add_handler(CommandHandler("deleteuser", delete_user_command))
 
     application.add_error_handler(error_handler)
 
     logging.info("Бот запущен...")
-    
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
-    
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Остановка бота...")
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+    await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 async def main():
-    # Инициализируем БД
-    await init_db()
-    
-    if db_pool is None:
-        logging.error("Не удалось подключиться к базе данных!")
-        return
-    
-    # Запускаем веб-сервер и бота
     await asyncio.gather(
         start_web_server(),
         run_bot()
