@@ -2,7 +2,7 @@ import logging
 from telegram import Update, ChatMember
 from telegram.ext import Application, CommandHandler, ContextTypes, ChatMemberHandler
 import random
-from datetime import datetime, timedelta, timezone  # <--- ИМПОРТИРОВАЛИ timezone
+from datetime import datetime, timedelta, timezone
 import os
 from aiohttp import web
 import asyncio
@@ -102,31 +102,23 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = str(user.id)
     nickname = user.first_name or user.username or "Unknown"
-    # --- ИЗМЕНЕНИЕ: Используем UTC для корректной работы на сервере ---
     current_time = datetime.now(timezone.utc)
 
-    # Получаем данные пользователя из базы
     user_data = get_user_data(user_id)
 
     if not user_data:
-        # Создаем нового пользователя
         logging.info(f"Создаем нового пользователя: {user_id} ({nickname})")
         user_data = create_or_update_user(user_id, nickname, 0.0, None)
         if not user_data:
             await update.message.reply_text("❌ Ошибка доступа к базе данных. Попробуйте позже.")
             return
 
-    # Если у пользователя нет размера (старая запись), установим 0
     if user_data.get('size') is None:
         user_data['size'] = 0.0
 
-    # Проверяем кулдаун
     if user_data.get('last_use'):
         try:
-            # --- ИЗМЕНЕНИЕ: last_use_time будет 'aware' (с часовым поясом) ---
             last_use_time = datetime.fromisoformat(user_data['last_use'])
-
-            # Убедимся, что last_use_time имеет часовой пояс для сравнения
             if last_use_time.tzinfo is None:
                 last_use_time = last_use_time.replace(tzinfo=timezone.utc)
 
@@ -137,23 +129,23 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 time_left = cooldown - time_passed
                 minutes = int(time_left.total_seconds() // 60)
                 seconds = int(time_left.total_seconds() % 60)
+                
+                # --- ИСПРАВЛЕНИЕ: Добавлен parse_mode='HTML' ---
                 await update.message.reply_text(
                     f"<i>{nickname}, повтори через {minutes} мин. {seconds} сек. </i>"
-                    f"<i>Текущий размер - {user_data['size']:.2f} см.</i>"
+                    f"<i>Текущий размер - {user_data['size']:.2f} см.</i>",
+                    parse_mode='HTML'
                 )
                 return
         except ValueError:
             logging.error(f"Неверный формат даты в 'last_use' для пользователя {user_id}: {user_data['last_use']}")
-
             pass
         except TypeError as e:
             logging.error(f"Ошибка сравнения времени для {user_id}: {e}", exc_info=True)
             pass
 
-
     growth = round(random.uniform(0.5, 4.0), 2)
     new_size = user_data['size'] + growth
-
 
     updated_user = create_or_update_user(
         user_id,
@@ -165,7 +157,8 @@ async def sisi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if updated_user:
         await update.message.reply_text(
             f"<i>{nickname}, твоя грудь выросла на {growth:.2f} см!</i> "
-            f"<i>Текущий размер - {new_size:.2f} см.🍈</i>"
+            f"<i>Текущий размер - {new_size:.2f} см.🍈</i>",
+            parse_mode='HTML'
         )
     else:
         await update.message.reply_text("❌ Ошибка обновления данных. Попробуйте позже.")
@@ -181,7 +174,10 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
+        # --- ИСПРАВЛЕНИЕ: Добавлен текст помощи ---
         await update.message.reply_text(
+            "Использование: /givesize <user_id> <размер>\n"
+            "Пример: /givesize 123456789 100.5"
         )
         return
 
@@ -210,7 +206,8 @@ async def give_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Ошибка обновления данных")
     except ValueError:
-        await update.message.reply_text("")
+        # --- ИСПРАВЛЕНИЕ: Добавлен текст ошибки ---
+        await update.message.reply_text("❌ Неверный формат. ID и размер должны быть числами.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
@@ -225,7 +222,10 @@ async def set_size_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
+        # --- ИСПРАВЛЕНИЕ: Добавлен текст помощи ---
         await update.message.reply_text(
+            "Использование: /setsize <user_id> <размер>\n"
+            "Пример: /setsize 123456789 100.5"
         )
         return
 
@@ -271,14 +271,12 @@ async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         target_user_id = str(context.args[0])
 
-        # Проверяем существование пользователя
         user_data = get_user_data(target_user_id)
 
         if not user_data:
             await update.message.reply_text(f"❌ Пользователь {target_user_id} не найден в базе данных")
             return
 
-        # Удаляем пользователя
         if delete_user(target_user_id):
             await update.message.reply_text(
                 f"✅ Статистика пользователя {target_user_id} ({user_data.get('nickname', 'N/A')}) полностью удалена\n"
@@ -350,12 +348,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# --- УЛУЧШЕННЫЙ ОБРАБОТЧИК ---
 async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отслеживание изменений в участниках чата (входы, выходы, бот)"""
     try:
-        # update.chat_member срабатывает, когда участник (не бот) меняет статус
-        # update.my_chat_member срабатывает, когда БОТ меняет статус
         result = update.chat_member or update.my_chat_member
 
         if not result:
@@ -384,7 +379,6 @@ async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.info(log_message)
 
     except Exception as e:
-        # Логгируем ошибку, но не валимся
         logging.error(f"Ошибка в track_chat_member: {e}", exc_info=True)
         if update:
             logging.error(f"Полный объект update, вызвавший ошибку: {update.to_json()}")
@@ -415,12 +409,14 @@ async def start_web_server():
     try:
         await site.start()
         logging.info(f"Веб-сервер запущен на порту {port}")
-        # Держим сервер живым
-        await asyncio.Event().wait()
+        # --- ИСПРАВЛЕНИЕ: УБРАНА БЛОКИРОВКА ---
+        # Мы НЕ ждем здесь вечно. Мы позволяем `run_bot` быть главным блокировщиком.
+        # await asyncio.Event().wait() # <--- УДАЛЕНО
     except Exception as e:
-        logging.error(f"Ошибка веб-сервера: {e}", exc_info=True)
-    finally:
-        await runner.cleanup()
+        logging.error(f"Ошибка запуска веб-сервера: {e}", exc_info=True)
+        # Не очищаем runner здесь, пусть main() разберется
+        
+    # Просто запускаем и выходим. `aiohttp` будет работать в фоновой задаче.
 
 
 async def run_bot():
@@ -433,7 +429,6 @@ async def run_bot():
 
     application = Application.builder().token(TOKEN).build()
 
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("sisi", sisi_command))
     application.add_handler(CommandHandler("stats", stats_command))
@@ -441,33 +436,34 @@ async def run_bot():
     application.add_handler(CommandHandler("givesize", give_size_command))
     application.add_handler(CommandHandler("setsize", set_size_command))
     application.add_handler(CommandHandler("deleteuser", delete_user_command))
-
-    # Добавляем обработчик для отслеживания участников
     application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.ANY_CHAT_MEMBER))
-
-    # Добавляем обработчик ошибок
     application.add_error_handler(error_handler)
 
     logging.info("Бот запускается (polling)...")
     try:
+        # Эта функция будет блокировать выполнение и держать цикл событий живым
+        # и для бота, и для веб-сервера
         await application.run_polling(
-            allowed_updates=Update.ALL_TYPES,  # <--- Упрощено для надежности
+            allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
     except Exception as e:
+        # Эта ошибка будет поймана, если polling упадет
         logging.critical(f"Критическая ошибка при запуске polling: {e}", exc_info=True)
+    finally:
+        logging.warning("Polling бота остановлен.")
+        # Здесь можно добавить код для грациозного завершения,
+        # но Render все равно перезапустит сервис.
 
 
 async def main():
     """Главная функция для запуска веб-сервера и бота параллельно"""
     logging.info("Запуск main()...")
 
-    # Запускаем обе задачи параллельно
-    # gather дождется завершения обеих (хотя в идеале они не должны завершаться)
     try:
         await asyncio.gather(
-            start_web_server(),
-            run_bot()
+            start_web_server(), # Эта функция быстро запустится и завершится
+            run_bot()           # Эта функция будет работать вечно (блокировать)
         )
     except Exception as e:
         logging.critical(f"Критическая ошибка в main() gather: {e}", exc_info=True)
